@@ -1,12 +1,13 @@
 import pytest
 from fastapi.testclient import TestClient
-from main import app, tasks_db, Task
+from main import app, tasks_db, Task, clear_tasks_db
+from pydantic import ValidationError
 
 client = TestClient(app)
 
 
 def test_create_task():
-    tasks_db.clear()
+    clear_tasks_db()
     response = client.post(
         "/tasks/",
         json={"title": "Test task", "description": "Test description"}
@@ -18,7 +19,7 @@ def test_create_task():
 
 
 def test_read_tasks():
-    tasks_db.clear()
+    clear_tasks_db()
     client.post("/tasks/", json={"title": "Task 1"})
     client.post("/tasks/", json={"title": "Task 2", "completed": True})
 
@@ -31,8 +32,25 @@ def test_read_tasks():
     assert len(response.json()) == 1
 
 
+def test_read_task_boundary_conditions():
+    clear_tasks_db()
+    response = client.post("/tasks/", json={"title": "Boundary task"})
+    assert response.status_code == 200  # Убедимся, что задача создана
+
+    task_id = response.json()["id"]  # Получаем ID созданной задачи
+    response = client.get(f"/tasks/{task_id}")
+    assert response.status_code == 200
+    assert response.json()["title"] == "Boundary task"
+
+    response = client.get("/tasks/0")
+    assert response.status_code == 404
+
+    response = client.get("/tasks/-1")
+    assert response.status_code == 404
+
+
 def test_create_task_with_missing_fields():
-    tasks_db.clear()
+    clear_tasks_db()
 
     response = client.post(
         "/tasks/",
@@ -44,23 +62,8 @@ def test_create_task_with_missing_fields():
     assert response.status_code == 422
 
 
-def test_read_task_boundary_conditions():
-    tasks_db.clear()
-    client.post("/tasks/", json={"title": "Boundary task"})
-
-    response = client.get("/tasks/1")
-    assert response.status_code == 200
-    assert response.json()["title"] == "Boundary task"
-
-    response = client.get("/tasks/0")
-    assert response.status_code == 404
-
-    response = client.get("/tasks/-1")
-    assert response.status_code == 404
-
-
 def test_update_task_with_invalid_data():
-    tasks_db.clear()
+    clear_tasks_db()
     client.post("/tasks/", json={"title": "Task to update"})
 
     response = client.put("/tasks/1", json={"completed": True})
@@ -70,11 +73,29 @@ def test_update_task_with_invalid_data():
     assert response.status_code == 422
 
 
-def test_delete_task_boundary_conditions():
-    tasks_db.clear()
-    client.post("/tasks/", json={"title": "Task to delete"})
+def test_task_validation():
+    # Тест на успешное создание объекта
+    task = Task(title="Valid Task", description="This is a valid task", completed=False)
+    assert task.title == "Valid Task"
+    assert task.description == "This is a valid task"
+    assert task.completed is False
 
-    response = client.delete("/tasks/1")
+    # Тест на ошибку при отсутствии обязательного поля title
+    with pytest.raises(ValidationError):
+        Task(description="Missing title")
+
+    # Тест на ошибку при превышении длины title
+    with pytest.raises(ValidationError):
+        Task(title="A" * 256, description="Too long title")
+
+
+def test_delete_task_boundary_conditions():
+    clear_tasks_db()
+    response = client.post("/tasks/", json={"title": "Task to delete"})
+    assert response.status_code == 200  # Убедимся, что задача создана
+
+    task_id = response.json()["id"]  # Получаем ID созданной задачи
+    response = client.delete(f"/tasks/{task_id}")
     assert response.status_code == 200
     assert response.json()["message"] == "Task deleted"
 
@@ -86,7 +107,7 @@ def test_delete_task_boundary_conditions():
 
 
 def test_create_task_with_long_title():
-    tasks_db.clear()
+    clear_tasks_db()
 
     long_title = "A" * 256
     response = client.post(
